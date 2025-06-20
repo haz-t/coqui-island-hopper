@@ -1,0 +1,1433 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Coqui Island Hopper</title>
+    <script src="https://cdn.jsdelivr.net/npm/@farcade/game-sdk@latest/dist/index.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: #000;
+        font-family: Arial, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        height: 100vh;
+        overflow: hidden;
+        margin: 0;
+        padding: 0;
+      }
+      .game-container {
+        background: transparent;
+        border-radius: 0;
+        padding: 0;
+        box-shadow: none;
+        backdrop-filter: none;
+        border: none;
+        width: 100vw;
+        height: 100vh;
+        max-width: none;
+        max-height: none;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+      }
+      .game-title {
+        text-align: center;
+        color: white;
+        font-size: 24px;
+        font-weight: bold;
+        margin-bottom: 10px;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+      }
+      #gameCanvas {
+        border: none;
+        border-radius: 0;
+        display: block;
+        margin: 0;
+        background: #87ceeb;
+        box-shadow: none;
+        cursor: pointer;
+        width: 100vw;
+        height: 100vh;
+        max-width: none;
+        max-height: none;
+      }
+      .controls {
+        text-align: center;
+        color: white;
+        font-size: 12px;
+        margin-top: 15px;
+        text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+      }
+      @media (max-width: 480px) {
+        .game-container {
+          padding: 15px;
+        }
+        .game-title {
+          font-size: 20px;
+        }
+      }
+      .loading {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        color: white;
+        font-size: 18px;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+      }
+      .navigation-header {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 60px;
+        z-index: 1000;
+        background: rgba(255, 107, 53, 0.9);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .navigation-header canvas {
+        max-width: 100%;
+        max-height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="navigation-header" id="navigationHeader" style="display: none;">
+      <!-- Navigation titles will be rendered here -->
+    </div>
+    <div class="game-container">
+      <div id="loadingScreen" class="loading">Loading sprites...</div>
+      <canvas id="gameCanvas" style="display: none"></canvas>
+      <div class="controls">
+        <p><strong>Controls:</strong> SPACE/Click: Jump • A/D: Move • S: Glide</p>
+      </div>
+    </div>
+
+    <script>
+      const GAME_CONFIG = {
+        width: window.innerWidth || 400,
+        height: window.innerHeight || 680,
+        gravity: 0.8,
+        jumpPower: 12,
+        moveSpeed: 4,
+        platformSpeed: 2.5,
+        playerSize: { width: 40, height: 40 },
+      };
+
+      let canvas,
+        ctx,
+        gameState = "loading",
+        gameStarted = false,
+        gameOver = false;
+      let score = 0,
+        combo = 0,
+        frameCount = 0,
+        lastTime = 0;
+      let assetsLoaded = false;
+
+      let player = {
+        x: 50,
+        y: 300,
+        velocityX: 0,
+        velocityY: 0,
+        onGround: false,
+        hasDoubleJump: false,
+        isGliding: false,
+        mood: "happy",
+        animFrame: 0,
+        animTimer: 0,
+        isJumping: false,
+        isWalking: false,
+      };
+      let platforms = [],
+        collectibles = [],
+        particles = [],
+        keys = new Set();
+      let backgroundOffset = 0,
+        screenShake = 0,
+        speedBoost = 0;
+      let weatherState = "clear",
+        courseTheme = "coastal",
+        courseSeed = 0;
+      let farcadeReady = false;
+      let gameAudioMuted = false;
+
+      // Sprite assets
+      let coquiIdleSprite = null;
+      let coquiJumpSprite = null;
+      let coquiWalkSprite = null;
+      let titleScreenSprite = null;
+      let navigationTitlesSprite = null;
+      let jumpSound = null;
+      // Background image
+      let backgroundImage = null;
+      const jumpFrames = { width: 64, height: 64, count: 3 }; // 3 frames for jump animation
+      const walkFrames = { width: 64, height: 64, count: 5 }; // 5 frames for walk animation
+      
+      // Cached transparent sprites for performance
+      let transparentIdleSprite = null;
+      let transparentJumpFrames = [];
+      let transparentWalkFrames = [];
+
+      const courseThemes = {
+        el_yunque: {
+          name: "El Yunque Rainforest",
+          platforms: ["tree-fern", "cecropia-leaf", "bamboo-platform"],
+          collectibles: ["bromeliad", "native-orchid"],
+          weather: ["rain", "mist"],
+          colors: { primary: "#006400", secondary: "#228B22", accent: "#32CD32" },
+        },
+        coastal: {
+          name: "Coastal Mangroves",
+          platforms: ["mangrove-roots", "coral-reef", "coconut-palm-log"],
+          collectibles: ["wild-mango", "flamboyan-flower"],
+          weather: ["clear", "trade-winds"],
+          colors: { primary: "#87CEEB", secondary: "#20B2AA", accent: "#FFD700" },
+        },
+        karst: {
+          name: "Karst Mountains",
+          platforms: ["taino-stone", "tree-fern", "coconut-palm-log"],
+          collectibles: ["native-orchid", "bromeliad"],
+          weather: ["clear", "wind"],
+          colors: { primary: "#708090", secondary: "#9ACD32", accent: "#FFD700" },
+        },
+        bioluminescent: {
+          name: "Bioluminescent Bay",
+          platforms: ["mangrove-roots", "coral-reef"],
+          collectibles: ["wild-mango"],
+          weather: ["clear", "night"],
+          colors: { primary: "#000080", secondary: "#00008B", accent: "#00FFFF" },
+        },
+        cloud_forest: {
+          name: "Cloud Forest",
+          platforms: ["tree-fern", "cecropia-leaf", "bamboo-platform"],
+          collectibles: ["bromeliad", "native-orchid"],
+          weather: ["mist", "rain"],
+          colors: { primary: "#98FB98", secondary: "#228B22", accent: "#90EE90" },
+        },
+      };
+
+      const utils = {
+        random: (min, max) => Math.random() * (max - min) + min,
+        randomInt: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
+        clamp: (value, min, max) => Math.max(min, Math.min(max, value)),
+      };
+
+      // Load sprite assets
+      function loadAssets() {
+        const loadImage = (url) => {
+          return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.crossOrigin = "anonymous";
+            img.onload = () => resolve(img);
+            img.onerror = reject;
+            img.src = url;
+          });
+        };
+
+        const loadAudio = (url) => {
+          return new Promise((resolve, reject) => {
+            const audio = new Audio();
+            audio.crossOrigin = "anonymous";
+            audio.oncanplaythrough = () => resolve(audio);
+            audio.onerror = reject;
+            audio.src = url;
+          });
+        };
+
+        Promise.all([
+          loadImage(
+            "https://lqy3lriiybxcejon.public.blob.vercel-storage.com/e64a9bc7-e084-438a-a97b-f39968d8759a/Coqui%2040x40-eAg8wDH1XQwsffXSHhBIJ7AY1tK2jK.png?V8PN",
+          ), // Coqui idle sprite
+          loadImage("https://lqy3lriiybxcejon.public.blob.vercel-storage.com/e64a9bc7-e084-438a-a97b-f39968d8759a/coqui_leap-dQmYUlpUpVogPe4lta6HMXdAnTSjKy.png?kkQQ"), // Coqui jump spritesheet
+          loadImage("https://lqy3lriiybxcejon.public.blob.vercel-storage.com/e64a9bc7-e084-438a-a97b-f39968d8759a/coqui_hop-2tgU5VaQlJWHPKqfX4geGpHAR4g6Cx.png?GVg1"), // Coqui walk spritesheet
+          loadImage(
+            "https://lqy3lriiybxcejon.public.blob.vercel-storage.com/e64a9bc7-e084-438a-a97b-f39968d8759a/cover_title-FCKAKHfVw12TfhwZUQH4S9lacis7ob.png?s3aR",
+          ), // Title screen image
+          loadImage(
+            "https://lqy3lriiybxcejon.public.blob.vercel-storage.com/e64a9bc7-e084-438a-a97b-f39968d8759a/Edited%20Titles-TFIk2FUk69O2aJeVSpN4MNmKoGMNRF.png?hcvE",
+          ), // Navigation titles image
+          loadAudio(
+            "https://lqy3lriiybxcejon.public.blob.vercel-storage.com/e64a9bc7-e084-438a-a97b-f39968d8759a/Coqui-sound-rSUGJMx5yeS59k70IkSKj2Vfrpsa4H.wav?9c5S",
+          ), // Jump sound
+          // New background image
+          loadImage("https://lqy3lriiybxcejon.public.blob.vercel-storage.com/e64a9bc7-e084-438a-a97b-f39968d8759a/Background-xGjGa8ggaXNVuOXzkK7rGq6vDrnJeP.jpg?Dmu6"), // Background image
+        ])
+          .then((assets) => {
+            coquiIdleSprite = assets[0];
+            coquiJumpSprite = assets[1];
+            coquiWalkSprite = assets[2];
+            titleScreenSprite = assets[3];
+            navigationTitlesSprite = assets[4];
+            jumpSound = assets[5];
+            jumpSound.volume = gameAudioMuted ? 0 : 0.3; // Set volume based on mute state
+            // Store background image
+            backgroundImage = assets[6];
+            
+            // Create transparent versions of sprites for caching
+            transparentIdleSprite = createTransparentSprite(coquiIdleSprite, 0, 0, 40, 40);
+            
+            // Create transparent versions of each jump frame
+            transparentJumpFrames = [];
+            for (let i = 0; i < jumpFrames.count; i++) {
+              transparentJumpFrames.push(
+                createTransparentSprite(
+                  coquiJumpSprite, 
+                  i * jumpFrames.width, 
+                  0, 
+                  jumpFrames.width, 
+                  jumpFrames.height
+                )
+              );
+            }
+            
+            // Create transparent versions of each walk frame
+            transparentWalkFrames = [];
+            for (let i = 0; i < walkFrames.count; i++) {
+              transparentWalkFrames.push(
+                createTransparentSprite(
+                  coquiWalkSprite, 
+                  i * walkFrames.width, 
+                  0, 
+                  walkFrames.width, 
+                  walkFrames.height
+                )
+              );
+            }
+            
+            assetsLoaded = true;
+            gameState = "menu";
+            document.getElementById("loadingScreen").style.display = "none";
+            document.getElementById("gameCanvas").style.display = "block";
+            console.log("✅ All assets loaded successfully!");
+            console.log("🎭 Sprite Details:");
+            console.log("Idle sprite:", coquiIdleSprite ? `${coquiIdleSprite.width}x${coquiIdleSprite.height}` : "❌ Failed");
+            console.log("Jump sprite:", coquiJumpSprite ? `${coquiJumpSprite.width}x${coquiJumpSprite.height}` : "❌ Failed");
+            console.log("Walk sprite:", coquiWalkSprite ? `${coquiWalkSprite.width}x${coquiWalkSprite.height}` : "❌ Failed");
+            console.log("Background:", backgroundImage ? `${backgroundImage.width}x${backgroundImage.height}` : "❌ Failed");
+            console.log("🎮 Frame configs:", {jumpFrames, walkFrames});
+          })
+          .catch((error) => {
+            console.error("❌ Failed to load assets:", error);
+            // Fallback to generated sprites
+            assetsLoaded = true;
+            gameState = "menu";
+            document.getElementById("loadingScreen").style.display = "none";
+            document.getElementById("gameCanvas").style.display = "block";
+          });
+      }
+
+      const createPixelArt = {
+        createPlatformSprite: (type, width = 100, height = 20) => {
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          switch (type) {
+            case "coconut-palm-log":
+              ctx.fillStyle = "#20B2AA"; // Light sea green
+              ctx.fillRect(0, 0, width, height);
+              ctx.fillStyle = "#008B8B"; // Dark cyan
+              for (let i = 0; i < width; i += 20) ctx.fillRect(i, 2, 2, height - 4);
+              ctx.fillStyle = "#00CED1"; // Dark turquoise highlight
+              ctx.fillRect(0, 0, width, 3);
+              break;
+            case "bamboo-platform":
+              ctx.fillStyle = "#32CD32"; // Lime green
+              ctx.fillRect(0, 0, width, height);
+              ctx.fillStyle = "#228B22"; // Forest green
+              // Enhanced bamboo pattern with segments
+              for (let i = 0; i < width; i += 12) {
+                ctx.fillRect(i + 2, 0, 2, height);
+                ctx.fillRect(i, height / 3, 6, 2); // Segment lines
+                ctx.fillRect(i, (2 * height) / 3, 6, 2);
+              }
+              ctx.fillStyle = "#7FFF00"; // Chartreuse highlight for jump boost
+              ctx.fillRect(0, 0, width, 2);
+              ctx.fillRect(0, height - 2, width, 2);
+              break;
+            case "coral-reef":
+              ctx.fillStyle = "#FF1493"; // Deep pink
+              ctx.fillRect(0, 0, width, height);
+              ctx.fillStyle = "#FF69B4"; // Hot pink
+              // Create coral formations
+              for (let i = 0; i < 6; i++) {
+                const x = utils.randomInt(5, width - 15),
+                  w = utils.randomInt(8, 14),
+                  h = utils.randomInt(6, 12);
+                ctx.fillRect(x, utils.randomInt(2, height - h - 2), w, h);
+              }
+              ctx.fillStyle = "#FFB6C1"; // Light pink highlights
+              for (let i = 8; i < width; i += 16) {
+                ctx.fillRect(i, 1, 2, height - 2); // Vertical highlights
+              }
+              break;
+            case "mangrove-roots":
+              ctx.fillStyle = "#4169E1"; // Royal blue
+              ctx.fillRect(0, 0, width, height);
+              ctx.fillStyle = "#1E90FF"; // Dodger blue
+              for (let i = 0; i < 6; i++) {
+                const x = (i * width) / 6 + utils.randomInt(-5, 5),
+                  w = utils.randomInt(6, 10);
+                ctx.fillRect(x, 0, w, height);
+              }
+              break;
+            case "taino-stone":
+              ctx.fillStyle = "#9370DB"; // Medium purple
+              ctx.fillRect(0, 0, width, height);
+              ctx.fillStyle = "#8A2BE2"; // Blue violet
+              for (let i = 0; i < 3; i++) {
+                const x = utils.randomInt(10, width - 25),
+                  w = utils.randomInt(15, 25);
+                ctx.fillRect(x, utils.randomInt(4, height - 7), w, 3);
+              }
+              ctx.fillStyle = "#DA70D6"; // Orchid highlight
+              ctx.fillRect(0, 0, width, 2);
+              break;
+            case "cecropia-leaf":
+              ctx.fillStyle = "#ADFF2F"; // Green yellow
+              ctx.fillRect(0, 0, width, height);
+              ctx.fillStyle = "#9ACD32"; // Yellow green
+              // Create leaf vein pattern
+              ctx.fillRect(width / 2 - 1, 0, 2, height); // Main vein
+              for (let i = 1; i < 4; i++) {
+                const veinX = (i * width) / 4;
+                ctx.fillRect(veinX - 1, height / 4, 2, height / 2); // Side veins
+                // Add smaller veins
+                for (let j = 1; j < 3; j++) {
+                  const smallVein = veinX + (j % 2 === 0 ? 8 : -8);
+                  if (smallVein > 0 && smallVein < width) {
+                    ctx.fillRect(smallVein, height / 3, 1, height / 3);
+                  }
+                }
+              }
+              ctx.fillStyle = "#98FB98"; // Pale green
+              ctx.fillRect(0, 0, width, 1); // Top edge
+              break;
+            case "tree-fern":
+              ctx.fillStyle = "#00FA9A"; // Medium spring green
+              ctx.fillRect(0, 0, width, height);
+              ctx.fillStyle = "#98FB98"; // Pale green
+              ctx.fillRect(5, 2, width - 10, height - 4);
+              ctx.fillStyle = "#00FF7F"; // Spring green
+              for (let i = 10; i < width; i += 20) ctx.fillRect(i, 0, 2, height);
+              break;
+            case "crumbling":
+              ctx.fillStyle = "#FF4500"; // Orange red
+              ctx.fillRect(0, 0, width, height);
+              ctx.fillStyle = "#8B0000"; // Dark red
+              // Add extensive crack pattern to show fragility
+              for (let i = 0; i < 8; i++) {
+                const x = utils.randomInt(3, width - 3);
+                const y = utils.randomInt(1, height - 1);
+                ctx.fillRect(x, y, 1, utils.randomInt(2, 6));
+                if (Math.random() > 0.5) {
+                  ctx.fillRect(x - 1, y + 2, 3, 1); // Horizontal crack
+                }
+              }
+              ctx.fillStyle = "#FF0000"; // Bright red warning
+              ctx.fillRect(0, 0, width, 1); // Top warning line
+              break;
+            case "bouncy":
+              ctx.fillStyle = "#FFD700"; // Bright gold
+              ctx.fillRect(0, 0, width, height);
+              ctx.fillStyle = "#FF4500"; // Orange red
+              ctx.fillRect(0, 0, width, 4); // Top stripe
+              ctx.fillRect(0, height - 4, width, 4); // Bottom stripe
+              ctx.fillStyle = "#FFFF00"; // Bright yellow
+              // Add bounce pattern - spring coils
+              for (let i = 8; i < width; i += 16) {
+                ctx.fillRect(i, 6, 3, height - 12);
+                ctx.fillRect(i + 3, 4, 3, 4);
+                ctx.fillRect(i + 3, height - 8, 3, 4);
+              }
+              break;
+            case "moving":
+              ctx.fillStyle = "#8B00FF"; // Electric violet
+              ctx.fillRect(0, 0, width, height);
+              ctx.fillStyle = "#FF00FF"; // Magenta
+              // Create chevron pattern to show movement
+              for (let i = 0; i < width; i += 8) {
+                ctx.fillRect(i, 0, 4, height / 2);
+                ctx.fillRect(i + 4, height / 2, 4, height / 2);
+              }
+              ctx.fillStyle = "#DA70D6"; // Orchid
+              ctx.fillRect(0, 0, width, 2); // Top highlight
+              ctx.fillRect(0, height - 2, width, 2); // Bottom highlight
+              break;
+            case "falling":
+              ctx.fillStyle = "#00FFFF"; // Cyan/Aqua
+              ctx.fillRect(0, 0, width, height);
+              ctx.fillStyle = "#008B8B"; // Dark cyan
+              // Create unstable/loose pattern
+              for (let i = 4; i < width - 4; i += 12) {
+                ctx.fillRect(i, 2, 8, height - 4);
+                ctx.fillRect(i + 2, 0, 4, 2); // Loose pieces on top
+                ctx.fillRect(i + 2, height - 2, 4, 2); // Loose pieces on bottom
+              }
+              ctx.fillStyle = "#E0FFFF"; // Light cyan
+              // Add warning pattern - dashed top
+              for (let i = 0; i < width; i += 6) {
+                ctx.fillRect(i, 0, 3, 1);
+              }
+              break;
+            default:
+              ctx.fillStyle = "#6A5ACD"; // Slate blue
+              ctx.fillRect(0, 0, width, height);
+              ctx.fillStyle = "#7B68EE"; // Medium slate blue
+              ctx.fillRect(0, 0, width, 3);
+          }
+          return canvas;
+        },
+        createCollectibleSprite: (type) => {
+          const canvas = document.createElement("canvas");
+          canvas.width = 20;
+          canvas.height = 20;
+          const ctx = canvas.getContext("2d");
+          switch (type) {
+            case "wild-mango":
+              ctx.fillStyle = "#FF6347";
+              ctx.fillRect(2, 2, 16, 16);
+              ctx.fillStyle = "#FF4500";
+              ctx.fillRect(4, 4, 12, 12);
+              ctx.fillStyle = "#228B22";
+              ctx.fillRect(8, 0, 4, 4);
+              break;
+            case "flamboyan-flower":
+              ctx.fillStyle = "#FF0000";
+              ctx.fillRect(2, 2, 16, 16);
+              ctx.fillStyle = "#FF69B4";
+              ctx.fillRect(4, 4, 12, 12);
+              ctx.fillStyle = "#FFD700";
+              ctx.fillRect(8, 8, 4, 4);
+              break;
+            case "bromeliad":
+              ctx.fillStyle = "#32CD32";
+              ctx.fillRect(2, 2, 16, 16);
+              ctx.fillStyle = "#228B22";
+              ctx.fillRect(6, 0, 2, 20);
+              ctx.fillRect(12, 0, 2, 20);
+              ctx.fillRect(0, 6, 20, 2);
+              ctx.fillRect(0, 12, 20, 2);
+              break;
+            case "native-orchid":
+              ctx.fillStyle = "#9370DB";
+              ctx.fillRect(2, 2, 16, 16);
+              ctx.fillStyle = "#8A2BE2";
+              ctx.fillRect(4, 4, 12, 12);
+              ctx.fillStyle = "#FFD700";
+              ctx.fillRect(8, 8, 4, 4);
+              break;
+            default:
+              ctx.fillStyle = "#FFD700";
+              ctx.fillRect(2, 2, 16, 16);
+          }
+          return canvas;
+        },
+      };
+
+      // Function to make sprite backgrounds transparent
+      function makeTransparent(imageData) {
+        const data = imageData.data;
+        const width = imageData.width;
+        const height = imageData.height;
+        
+        // Sample corner pixels to determine background color
+        const corners = [
+          [0, 0], // top-left
+          [width - 1, 0], // top-right
+          [0, height - 1], // bottom-left
+          [width - 1, height - 1] // bottom-right
+        ];
+        
+        // Get the most common corner color as background
+        let backgroundColors = [];
+        corners.forEach(([x, y]) => {
+          const index = (y * width + x) * 4;
+          backgroundColors.push([data[index], data[index + 1], data[index + 2]]);
+        });
+        
+        // Use the first corner as background reference
+        const backgroundColor = backgroundColors[0];
+        const tolerance = 50; // Higher tolerance for better detection
+        
+        console.log("Background color detected:", backgroundColor);
+        
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          
+          // Check if pixel is close to the background color
+          if (
+            Math.abs(r - backgroundColor[0]) < tolerance &&
+            Math.abs(g - backgroundColor[1]) < tolerance &&
+            Math.abs(b - backgroundColor[2]) < tolerance
+          ) {
+            data[i + 3] = 0; // Set alpha to 0 (transparent)
+          }
+          
+          // Also remove very dark colors (common sprite backgrounds)
+          if (r < 20 && g < 20 && b < 20) {
+            data[i + 3] = 0;
+          }
+          
+          // Remove pure black
+          if (r === 0 && g === 0 && b === 0) {
+            data[i + 3] = 0;
+          }
+        }
+        
+        return imageData;
+      }
+
+      // Function to create transparent version of sprite
+      function createTransparentSprite(sourceImage, sourceX = 0, sourceY = 0, sourceWidth = null, sourceHeight = null) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        sourceWidth = sourceWidth || sourceImage.width;
+        sourceHeight = sourceHeight || sourceImage.height;
+        
+        canvas.width = sourceWidth;
+        canvas.height = sourceHeight;
+        
+        // Draw the source image
+        ctx.drawImage(sourceImage, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
+        
+        // Get image data and make background transparent
+        const imageData = ctx.getImageData(0, 0, sourceWidth, sourceHeight);
+        const transparentData = makeTransparent(imageData);
+        
+        // Put the transparent data back
+        ctx.putImageData(transparentData, 0, 0);
+        
+        return canvas;
+      }
+
+      function drawPlayer() {
+        if (!assetsLoaded) {
+          ctx.fillStyle = player.isGliding ? "#ADFF2F" : "#90EE90";
+          ctx.fillRect(player.x, player.y, GAME_CONFIG.playerSize.width, GAME_CONFIG.playerSize.height);
+          return;
+        }
+
+        ctx.imageSmoothingEnabled = false;
+        ctx.globalCompositeOperation = 'source-over';
+
+        // Apply gliding effect
+        if (player.isGliding) {
+          ctx.shadowColor = "#90EE90";
+          ctx.shadowBlur = 15;
+        }
+
+        // Always use idle sprite (simplified)
+        if (coquiIdleSprite) {
+          try {
+            ctx.drawImage(
+              coquiIdleSprite,
+              0, 0, 40, 40,
+              player.x, player.y, GAME_CONFIG.playerSize.width, GAME_CONFIG.playerSize.height
+            );
+          } catch (e) {
+            console.error("❌ Idle sprite error:", e);
+            // Fallback to colored rectangle
+            ctx.fillStyle = player.isGliding ? "#ADFF2F" : "#90EE90";
+            ctx.fillRect(player.x, player.y, GAME_CONFIG.playerSize.width, GAME_CONFIG.playerSize.height);
+          }
+        } else {
+          // Fallback to colored rectangle
+          ctx.fillStyle = player.isGliding ? "#ADFF2F" : "#90EE90";
+          ctx.fillRect(player.x, player.y, GAME_CONFIG.playerSize.width, GAME_CONFIG.playerSize.height);
+        }
+
+        ctx.shadowBlur = 0;
+      }
+
+      function initGame() {
+        canvas = document.getElementById("gameCanvas");
+        ctx = canvas.getContext("2d");
+        
+        // Set canvas to full screen dimensions
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        // Update game config with actual dimensions
+        GAME_CONFIG.width = canvas.width;
+        GAME_CONFIG.height = canvas.height;
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+          canvas.width = window.innerWidth;
+          canvas.height = window.innerHeight;
+          GAME_CONFIG.width = canvas.width;
+          GAME_CONFIG.height = canvas.height;
+        });
+        
+        // Initialize Farcade SDK
+        if (window.FarcadeSDK) {
+          // Handle play again requests
+          window.FarcadeSDK.on('play_again', () => {
+            restartGame();
+          });
+          
+          // Handle mute/unmute
+          window.FarcadeSDK.on('toggle_mute', (data) => {
+            gameAudioMuted = data.isMuted;
+            if (jumpSound) {
+              jumpSound.volume = gameAudioMuted ? 0 : 0.3;
+            }
+          });
+          
+          farcadeReady = true;
+          console.log("✅ Farcade SDK initialized");
+        } else {
+          console.log("⚠️ Farcade SDK not available");
+        }
+        
+        generateRandomCourse();
+        initializePlatforms();
+        setupEventListeners();
+        loadAssets(); // Load sprites first
+        requestAnimationFrame(gameLoop);
+      }
+
+      function generateRandomCourse() {
+        courseSeed = utils.randomInt(1000, 9999);
+        const themeKeys = Object.keys(courseThemes);
+        courseTheme = themeKeys[utils.randomInt(0, themeKeys.length - 1)];
+        const theme = courseThemes[courseTheme];
+        weatherState = theme.weather[utils.randomInt(0, theme.weather.length - 1)];
+      }
+
+      function initializePlatforms() {
+        // Create starting platforms that are guaranteed reachable
+        // Use the same physics calculations for consistency
+        const groundLevel = GAME_CONFIG.height - 100; // Near bottom of screen
+        platforms = [
+          { x: 0, y: groundLevel, width: 150, height: 20, type: "coconut-palm-log" },
+          { x: 170, y: groundLevel - 60, width: 120, height: 20, type: "bamboo-platform" }, // Gap: 20px, Height diff: -60px
+          { x: 320, y: groundLevel - 110, width: 130, height: 20, type: "coral-reef" }, // Gap: 30px, Height diff: -50px
+          { x: 480, y: groundLevel - 160, width: 140, height: 20, type: "mangrove-roots" }, // Gap: 30px, Height diff: -50px
+        ];
+      }
+
+      function setupEventListeners() {
+        document.addEventListener("keydown", (e) => {
+          keys.add(e.code);
+          if (e.code === "Space") {
+            e.preventDefault();
+            handleJump();
+          }
+          if (e.code === "KeyS") {
+            e.preventDefault();
+            if (gameStarted && !gameOver) player.isGliding = player.velocityY > 0 && !player.onGround;
+          }
+        });
+        document.addEventListener("keyup", (e) => {
+          keys.delete(e.code);
+          if (e.code === "KeyS") player.isGliding = false;
+        });
+        canvas.addEventListener("click", handleCanvasClick);
+        canvas.addEventListener("touchstart", (e) => {
+          e.preventDefault();
+          handleCanvasClick(e.touches[0]);
+        });
+      }
+
+      function handleCanvasClick(e) {
+        if (gameState === "menu") startGame();
+        else if (gameState === "gameOver") restartGame();
+        else if (gameState === "playing") handleJump();
+      }
+
+      function handleJump() {
+        if (gameState === "menu") {
+          startGame();
+          return;
+        }
+        if (gameState !== "playing") {
+          console.log("Jump attempted but game state is:", gameState);
+          return;
+        }
+        
+        console.log("Jump attempt - onGround:", player.onGround, "hasDoubleJump:", player.hasDoubleJump);
+        
+        if (player.onGround) {
+          player.velocityY = -GAME_CONFIG.jumpPower;
+          player.onGround = false;
+          player.hasDoubleJump = true;
+          player.isJumping = true;
+          player.animFrame = 0;
+          player.animTimer = 0;
+          addParticles(player.x + 20, player.y + 40, "#90EE90", 3);
+          console.log("✅ Ground jump executed!");
+          // Play jump sound
+          if (jumpSound) {
+            jumpSound.currentTime = 0;
+            jumpSound.play().catch(e => console.log("Audio play failed:", e));
+          }
+          if (farcadeReady && window.FarcadeSDK) window.FarcadeSDK.singlePlayer.actions.hapticFeedback();
+        } else if (player.hasDoubleJump) {
+          player.velocityY = -GAME_CONFIG.jumpPower * 1.1; // Increased to 110% of original jump power
+          player.hasDoubleJump = false;
+          player.isJumping = true;
+          player.animFrame = 0;
+          player.animTimer = 0;
+          addParticles(player.x + 20, player.y + 40, "#FFD700", 8); // More particles for double jump
+          addParticles(player.x + 20, player.y + 40, "#FF69B4", 4); // Extra colorful particles
+          combo++;
+          screenShake = 8; // More screen shake for enhanced double jump
+          console.log("✅ Enhanced Double jump executed!");
+          // Play jump sound
+          if (jumpSound) {
+            jumpSound.currentTime = 0;
+            jumpSound.play().catch(e => console.log("Audio play failed:", e));
+          }
+          if (farcadeReady && window.FarcadeSDK) window.FarcadeSDK.singlePlayer.actions.hapticFeedback();
+        } else {
+          console.log("❌ Jump failed - not on ground and no double jump available");
+        }
+      }
+
+      function startGame() {
+        gameState = "playing";
+        gameStarted = true;
+        gameOver = false;
+        const groundLevel = GAME_CONFIG.height - 100;
+        player = {
+          x: 50,
+          y: groundLevel - 40,  // Position player on the first platform
+          velocityX: 0,
+          velocityY: 0,
+          onGround: true,  // Start on ground for immediate jump capability
+          hasDoubleJump: true,  // Allow double jump from start
+          isGliding: false,
+          mood: "happy",
+          isJumping: false,
+        };
+        score = 0;
+        combo = 0;
+        backgroundOffset = 0;
+        screenShake = 0;
+        speedBoost = 0;
+        collectibles = [];
+        particles = [];
+        initializePlatforms();
+        
+        // Ensure canvas has focus for immediate input responsiveness
+        if (canvas && canvas.focus) {
+          canvas.focus();
+        }
+        // Set canvas tabindex to make it focusable
+        canvas.setAttribute('tabindex', '0');
+        
+        // Notify Farcade SDK that game is ready to play
+        if (farcadeReady && window.FarcadeSDK) {
+          window.FarcadeSDK.singlePlayer.actions.ready();
+          console.log("🎮 Game ready - Farcade SDK notified");
+        }
+      }
+
+      function restartGame() {
+        generateRandomCourse();
+        startGame();
+      }
+
+      function endGame() {
+        gameState = "gameOver";
+        gameOver = true;
+        
+        // Haptic feedback for game over
+        if (farcadeReady && window.FarcadeSDK) {
+          window.FarcadeSDK.singlePlayer.actions.hapticFeedback();
+        }
+        
+        // Calculate final score
+        const finalScore = Math.floor(score / 10);
+        
+        // Notify Farcade SDK of game over
+        if (farcadeReady && window.FarcadeSDK) {
+          window.FarcadeSDK.singlePlayer.actions.gameOver({ score: finalScore });
+          console.log("🏁 Game over - Score:", finalScore);
+        }
+      }
+
+      function gameLoop(currentTime) {
+        const deltaTime = currentTime - lastTime;
+        lastTime = currentTime;
+        frameCount++;
+        if (gameState === "playing") updateGame(deltaTime);
+        render();
+        requestAnimationFrame(gameLoop);
+      }
+
+      function updateGame(deltaTime) {
+        const dt = deltaTime / 16.67;
+        backgroundOffset += (1 + speedBoost * 0.5) * dt;
+
+        // Update player - increase gravity with difficulty
+        const difficulty = Math.min(score / 500, 2); // Max difficulty multiplier of 2
+        const gravity = player.isGliding ? 
+          (GAME_CONFIG.gravity + difficulty * 0.2) * 0.3 : 
+          GAME_CONFIG.gravity + difficulty * 0.2;
+        player.velocityY += gravity * dt;
+        let moveSpeed = GAME_CONFIG.moveSpeed + speedBoost;
+        if (player.mood === "excited") moveSpeed *= 1.2;
+        else if (player.mood === "scared") moveSpeed *= 0.8;
+        else if (player.mood === "tired") moveSpeed *= 0.9;
+
+        player.velocityX = 0;
+        if (keys.has("KeyA") || keys.has("ArrowLeft")) player.velocityX = -moveSpeed;
+        if (keys.has("KeyD") || keys.has("ArrowRight")) player.velocityX = moveSpeed;
+
+        player.x += player.velocityX * dt;
+        player.y += player.velocityY * dt;
+        player.x = utils.clamp(player.x, 0, GAME_CONFIG.width - GAME_CONFIG.playerSize.width);
+
+        checkPlatformCollisions();
+        checkCollectibleCollisions();
+
+        // Update platforms with progressive speed increase
+        const difficultySpeedBoost = Math.min(score / 1200, 2.5); // Gradual speed increase up to 2.5x
+        const platformSpeed = (GAME_CONFIG.platformSpeed + speedBoost + difficultySpeedBoost) * dt;
+        platforms.forEach((platform) => {
+          platform.x -= platformSpeed;
+          
+          // Special platform behaviors
+          if (platform.type === "moving" && platform.moveSpeed) {
+            platform.y += platform.moveDirection * platform.moveSpeed * dt;
+            if (Math.abs(platform.y - platform.originalY) > platform.moveRange) {
+              platform.moveDirection *= -1; // Reverse direction
+            }
+          }
+          
+          if (platform.type === "falling" && platform.triggered) {
+            if (platform.fallDelay > 0) {
+              platform.fallDelay -= dt; // Countdown delay
+            } else {
+              // Start falling after delay
+              if (platform.fallSpeed === null) platform.fallSpeed = 0.1; // Very slow initial speed
+              platform.fallSpeed += 0.12 * dt; // Gradual acceleration
+              platform.y += platform.fallSpeed * dt;
+            }
+          }
+          
+          if (platform.type === "crumbling" && platform.health !== null && platform.health <= 0) {
+            platform.y += 2 * dt; // Fall when broken
+          }
+        });
+        platforms = platforms.filter((platform) => platform.x > -200 && platform.y < GAME_CONFIG.height + 50);
+
+        const lastPlatform = platforms[platforms.length - 1];
+        if (!lastPlatform || lastPlatform.x < GAME_CONFIG.width - 100) generateNewPlatform();
+
+        // Update collectibles
+        const speed = (2 + speedBoost) * dt;
+        collectibles.forEach((collectible) => {
+          collectible.x -= speed;
+          collectible.bobOffset += 0.1 * dt;
+          collectible.y += Math.sin(collectible.bobOffset) * 0.5;
+        });
+        collectibles = collectibles.filter((c) => c.x > -30 && !c.collected);
+
+        // Update particles
+        particles.forEach((particle) => {
+          particle.x += particle.velocityX * dt;
+          particle.y += particle.velocityY * dt;
+          particle.velocityY += 0.2 * dt;
+          particle.life -= dt;
+          particle.alpha = particle.life / particle.maxLife;
+        });
+        particles = particles.filter((particle) => particle.life > 0);
+
+        if (screenShake > 0) screenShake = Math.max(0, screenShake - 0.5);
+        if (speedBoost > 0) speedBoost = Math.max(0, speedBoost - 0.02);
+        score += (2 + Math.floor(speedBoost)) * dt;
+        if (player.y > GAME_CONFIG.height + 100) {
+          console.log(`💀 Game Over: Score=${Math.floor(score/10)}m, Difficulty=${difficulty.toFixed(1)}, Last Platform Gap=${platforms.length > 0 ? Math.round(platforms[platforms.length-1].x - (platforms[platforms.length-2]?.x + platforms[platforms.length-2]?.width || 0)) : 'N/A'}px`);
+          endGame();
+        }
+      }
+
+      function checkPlatformCollisions() {
+        let wasOnGround = false;
+        
+        platforms.forEach((platform) => {
+          if (
+            player.velocityY >= 0 &&
+            player.x + GAME_CONFIG.playerSize.width > platform.x &&
+            player.x < platform.x + platform.width &&
+            player.y + GAME_CONFIG.playerSize.height >= platform.y &&
+            player.y + GAME_CONFIG.playerSize.height <= platform.y + platform.height + 10 &&
+            player.y <= platform.y &&
+            platform.health !== 0 // Can't land on broken platforms
+          ) {
+            player.y = platform.y - GAME_CONFIG.playerSize.height;
+            player.velocityY = 0;
+            player.onGround = true;
+            player.hasDoubleJump = true;
+            player.isJumping = false;
+            wasOnGround = true;
+            
+            // Special platform behaviors
+            if (platform.type === "bouncy" && platform.bounceForce) {
+              player.velocityY = -platform.bounceForce;
+              player.onGround = false;
+              player.isJumping = true;
+              addParticles(player.x + 20, player.y + 40, "#FFD700", 8);
+              combo++;
+              screenShake = 10;
+              // Haptic feedback for bouncy platform
+              if (farcadeReady && window.FarcadeSDK) {
+                window.FarcadeSDK.singlePlayer.actions.hapticFeedback();
+              }
+            } else if (platform.type === "crumbling" && platform.health !== null) {
+              platform.health -= 1;
+              if (platform.health <= 0) {
+                addParticles(platform.x + platform.width / 2, platform.y, "#FF6347", 12); // Red particles for crumbling
+                screenShake = 5;
+              }
+            } else if (platform.type === "falling" && !platform.triggered) {
+              platform.triggered = true;
+              platform.fallDelay = 30; // Reset delay counter when first stepped on
+              addParticles(platform.x + platform.width / 2, platform.y, "#00FFFF", 6); // Cyan particles for falling
+            } else if (platform.type === "bamboo-platform") {
+              player.velocityY = -GAME_CONFIG.jumpPower * 1.3;
+              player.onGround = false;
+              player.isJumping = true;
+              addParticles(player.x + 20, player.y + 40, "#90EE90", 6);
+              combo++;
+              screenShake = 8;
+            }
+            
+            // Landing particles
+            if (Math.random() < 0.4) {
+              addParticles(platform.x + platform.width / 2, platform.y, "#90EE90", 2);
+            }
+          }
+        });
+        
+        // If player is not touching any platform and moving downward, they're not on ground
+        if (!wasOnGround && player.velocityY > 0) {
+          player.onGround = false;
+        }
+      }
+
+      function checkCollectibleCollisions() {
+        collectibles.forEach((collectible, index) => {
+          if (
+            !collectible.collected &&
+            player.x + GAME_CONFIG.playerSize.width > collectible.x &&
+            player.x < collectible.x + 20 &&
+            player.y + GAME_CONFIG.playerSize.height > collectible.y &&
+            player.y < collectible.y + 20
+          ) {
+            collectible.collected = true;
+            addParticles(collectible.x + 10, collectible.y + 10, "#FFD700", 10);
+            screenShake = 3;
+            combo++;
+            const theme = courseThemes[courseTheme];
+            switch (collectible.type) {
+              case "wild-mango":
+                score += 50;
+                break;
+              case "flamboyan-flower":
+                score += 75;
+                speedBoost = Math.max(speedBoost, 2);
+                break;
+              case "bromeliad":
+                score += 100;
+                player.hasDoubleJump = true;
+                break;
+              case "native-orchid":
+                score += 150;
+                combo += 1;
+                break;
+            }
+            if (farcadeReady && window.FarcadeSDK) window.FarcadeSDK.singlePlayer.actions.hapticFeedback();
+            collectibles.splice(index, 1);
+          }
+        });
+      }
+
+      function generateNewPlatform() {
+        try {
+          const theme = courseThemes[courseTheme];
+          const lastPlatform = platforms[platforms.length - 1] || { x: GAME_CONFIG.width, y: 400, width: 100 };
+        
+        // Progressive difficulty based on score - more gradual progression
+        const difficulty = Math.min(score / 800, 2.5); // Max difficulty at 2000 points, reduced max difficulty
+        
+        // Calculate player's movement capabilities to ensure reachability
+        const jumpPower = GAME_CONFIG.jumpPower; // 12
+        const doubleJumpPower = jumpPower * 1.1; // 13.2 (110% of original jump power)
+        const gravity = GAME_CONFIG.gravity; // 0.8
+        const moveSpeed = GAME_CONFIG.moveSpeed; // 4
+        
+        // Physics calculations for maximum reachable distances
+        // Single jump time in air: 2 * jumpPower / gravity = 30 frames
+        const singleJumpTime = 2 * jumpPower / gravity;
+        // Double jump adds about 75% more air time
+        const doubleJumpTime = singleJumpTime + (2 * doubleJumpPower / gravity);
+        
+        // Maximum horizontal distance with movement and double jump
+        const maxHorizontalReach = doubleJumpTime * moveSpeed; // ~200 pixels
+        // Maximum jump height: jumpPower^2 / (2 * gravity) = 90 pixels
+        const maxJumpHeight = (jumpPower * jumpPower) / (2 * gravity);
+        // With double jump, can reach about 140 pixels height
+        const maxDoubleJumpHeight = maxJumpHeight + (doubleJumpPower * doubleJumpPower) / (2 * gravity);
+        
+        // Safe gap calculation - ensure it's always reachable with generous margin
+        const safetyMargin = 0.65; // 35% safety margin (more conservative)
+        
+        // Log physics calculations once for debugging (first platform generation)
+        if (platforms.length <= 4) {
+          console.log(`🎯 Enhanced Player Physics: Max Horizontal=${Math.round(maxHorizontalReach)}px, Max Height=${Math.round(maxDoubleJumpHeight)}px, Jump Time=${Math.round(doubleJumpTime)} frames`);
+          console.log(`🎯 Safety Limits: Horizontal=${Math.round(maxHorizontalReach * safetyMargin)}px, Vertical=${Math.round(maxDoubleJumpHeight * safetyMargin)}px, Double Jump Power=${doubleJumpPower.toFixed(1)} (110% of normal)`);
+        }
+        const minGap = Math.max(30, 50 - difficulty * 3); // Smaller minimum gaps
+        const maxGap = Math.min(maxHorizontalReach * safetyMargin, Math.max(90, 120 - difficulty * 8));
+        const gap = utils.random(minGap, maxGap);
+        
+        // Safe height difference calculation - more conservative
+        // For upward jumps, limit to what player can actually reach
+        // For downward jumps, be more generous but still reasonable
+        const maxUpwardDiff = maxDoubleJumpHeight * safetyMargin; // More conservative
+        const maxDownwardDiff = 120; // Reduced downward movement
+        
+        const heightDiff = utils.random(
+          -maxDownwardDiff, 
+          Math.max(maxUpwardDiff - difficulty * 8, 50) // More gradual difficulty increase
+        );
+        
+        const newY = utils.clamp(lastPlatform.y + heightDiff, 100, GAME_CONFIG.height - 100);
+        
+        // Vary platform widths for challenge but keep them reasonable
+        const minWidth = Math.max(70, 100 - difficulty * 8);
+        const maxWidth = Math.max(120, 160 - difficulty * 10);
+        const width = utils.random(minWidth, maxWidth);
+        
+        // Platform type selection with special behaviors
+        const platformTypes = [
+          "coconut-palm-log", "bamboo-platform", "coral-reef", "mangrove-roots", "taino-stone", "cecropia-leaf", "tree-fern",
+          "crumbling", "bouncy", "moving", "falling"
+        ];
+        
+        // Higher chance of special platforms as difficulty increases
+        let type;
+        if (Math.random() < 0.2 + difficulty * 0.15) { // 20% base, up to 65% chance
+          const specialTypes = ["crumbling", "bouncy", "moving", "falling"];
+          type = specialTypes[utils.randomInt(0, specialTypes.length - 1)];
+        } else {
+          const normalTypes = theme.platforms;
+          type = normalTypes[utils.randomInt(0, normalTypes.length - 1)];
+        }
+        
+        // Validate reachability before finalizing platform
+        let finalGap = gap;
+        let finalY = newY;
+        let finalWidth = width;
+        
+        // For challenging jumps (upward or long distance), ensure platform is wide enough to land on
+        const isChallengingJump = gap > maxHorizontalReach * 0.6 || (newY < lastPlatform.y - 50);
+        if (isChallengingJump) {
+          finalWidth = Math.max(finalWidth, 90); // Ensure wider landing platform
+        }
+        
+        // For very difficult special platforms, reduce gap to ensure reachability
+        if (type === "crumbling" || type === "falling") {
+          finalGap = Math.min(gap, maxHorizontalReach * 0.7); // Easier reach for dangerous platforms
+          finalWidth = Math.max(finalWidth, 100); // Wider crumbling/falling platforms
+        }
+        
+        // For bouncy platforms, can allow slightly larger gaps since they boost player
+        if (type === "bouncy") {
+          // Bouncy platforms can have normal gaps since they help player reach further
+        }
+        
+        // Enhanced final validation: ensure no impossible jumps
+        const horizontalDistance = finalGap;
+        const verticalDistance = Math.abs(finalY - lastPlatform.y);
+        const isUpwardJump = finalY < lastPlatform.y;
+        
+        // Multi-tier reachability validation
+        const conservativeHorizontalLimit = maxHorizontalReach * 0.6;
+        const conservativeVerticalLimit = maxDoubleJumpHeight * 0.6;
+        
+        // Tier 1: If both dimensions are challenging, make one easier
+        if (horizontalDistance > conservativeHorizontalLimit && verticalDistance > conservativeVerticalLimit) {
+          if (Math.random() < 0.6) { // Prefer reducing horizontal distance
+            finalGap = utils.random(minGap, conservativeHorizontalLimit);
+          } else {
+            finalY = lastPlatform.y + utils.random(-50, 50); // Keep height changes reasonable
+          }
+        }
+        
+        // Tier 2: Absolute safety check - never exceed theoretical limits
+        if (finalGap > maxHorizontalReach * 0.75) {
+          finalGap = maxHorizontalReach * 0.75;
+        }
+        if (isUpwardJump && (lastPlatform.y - finalY) > maxDoubleJumpHeight * 0.75) {
+          finalY = lastPlatform.y - (maxDoubleJumpHeight * 0.75);
+        }
+        
+        // Tier 3: Emergency fallback for any remaining edge cases
+        if (finalGap > maxHorizontalReach * 0.8 || (isUpwardJump && (lastPlatform.y - finalY) > maxDoubleJumpHeight * 0.8)) {
+          finalGap = utils.random(minGap, maxHorizontalReach * 0.5); // Safe gap
+          finalY = lastPlatform.y + utils.random(-40, 80); // Easier jump
+          console.log("🚨 Emergency platform adjustment applied!");
+        }
+
+        const newPlatform = {
+          x: lastPlatform.x + lastPlatform.width + finalGap,
+          y: finalY,
+          width: finalWidth,
+          height: 20,
+          type: type,
+          // Special platform properties
+          health: type === "crumbling" ? 80 : null, // Longer lasting crumbling platforms
+          bounceForce: type === "bouncy" ? 15 : null,
+          moveSpeed: type === "moving" ? utils.random(0.4, 1.2) : null, // Slightly slower moving platforms
+          moveDirection: type === "moving" ? (Math.random() > 0.5 ? 1 : -1) : null,
+          moveRange: type === "moving" ? utils.random(40, 80) : null, // Smaller movement range
+          originalY: finalY,
+          fallSpeed: type === "falling" ? 0 : null, // Start at 0, will be set when triggered
+          triggered: false,
+          fallDelay: type === "falling" ? 30 : 0 // 30 frame delay before falling starts
+        };
+        
+        platforms.push(newPlatform);
+        
+                 // Enhanced debugging for platform generation
+         const actualHorizontalDistance = finalGap;
+         const actualVerticalDistance = Math.abs(finalY - lastPlatform.y);
+         const jumpRequired = finalY < lastPlatform.y ? "UP" : "DOWN";
+        
+        // Calculate if this jump is theoretically possible
+        const maxSafeHorizontal = maxHorizontalReach * 0.75; // More conservative estimate
+        const maxSafeVertical = maxDoubleJumpHeight * 0.75;
+        const isPotentiallyImpossible = actualHorizontalDistance > maxSafeHorizontal && actualVerticalDistance > maxSafeVertical;
+        
+        // Always log potentially impossible platforms + random sample
+        if (isPotentiallyImpossible || Math.random() < 0.15 || (finalGap !== gap || finalY !== newY)) {
+          const warningFlag = isPotentiallyImpossible ? "⚠️ DIFFICULT" : "✅";
+          console.log(`${warningFlag} Platform #${platforms.length + 1}: Gap=${Math.round(actualHorizontalDistance)}px/${Math.round(maxSafeHorizontal)}px, ${jumpRequired} ${Math.round(actualVerticalDistance)}px/${Math.round(maxSafeVertical)}px, Type=${type}, Width=${Math.round(finalWidth)}px, Difficulty=${difficulty.toFixed(1)}`);
+        }
+        
+        // Fewer collectibles as difficulty increases
+        if (Math.random() < Math.max(0.1, 0.3 - difficulty * 0.1)) {
+          const collectibleTypes = theme.collectibles;
+          const collectibleType = collectibleTypes[utils.randomInt(0, collectibleTypes.length - 1)];
+          collectibles.push({
+            x: newPlatform.x + newPlatform.width / 2 - 10,
+            y: newPlatform.y - 30,
+            type: collectibleType,
+            collected: false,
+            bobOffset: Math.random() * Math.PI * 2,
+          });
+        }
+        } catch (error) {
+          console.error("🚨 Error generating platform:", error);
+          // Fallback: generate a simple, safe platform
+          const simplePlatform = {
+            x: (platforms[platforms.length - 1]?.x || 0) + 150,
+            y: GAME_CONFIG.height - 200,
+            width: 120,
+            height: 20,
+            type: "coconut-palm-log",
+            health: null,
+            bounceForce: null,
+            moveSpeed: null,
+            moveDirection: null,
+            moveRange: null,
+            originalY: GAME_CONFIG.height - 200,
+            fallSpeed: null,
+            triggered: false
+          };
+          platforms.push(simplePlatform);
+        }
+      }
+
+      function addParticles(x, y, color, count) {
+        for (let i = 0; i < count; i++) {
+          particles.push({
+            x: x + utils.random(-10, 10),
+            y: y + utils.random(-10, 10),
+            velocityX: utils.random(-4, 4),
+            velocityY: utils.random(-4, 4),
+            life: utils.random(20, 40),
+            maxLife: 30,
+            color: color,
+            alpha: 1,
+          });
+        }
+      }
+
+      function drawScrollingBackground() {
+        if (!backgroundImage) {
+          // Fallback to gradient background
+          const theme = courseThemes[courseTheme],
+            colors = theme.colors;
+          const gradient = ctx.createLinearGradient(0, 0, 0, GAME_CONFIG.height);
+          gradient.addColorStop(0, colors.primary);
+          gradient.addColorStop(0.6, colors.secondary);
+          gradient.addColorStop(1, colors.accent);
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, GAME_CONFIG.width, GAME_CONFIG.height);
+          return;
+        }
+
+        // Calculate background scroll for parallax effect
+        const scrollSpeed = 0.3; // Slower than platforms for parallax
+        const scrollOffset = (backgroundOffset * scrollSpeed) % backgroundImage.width;
+
+        // Scale background to fit canvas height
+        const scaleY = GAME_CONFIG.height / backgroundImage.height;
+        const scaledWidth = backgroundImage.width * scaleY;
+
+        // Draw repeating background pattern
+        let currentX = -scrollOffset;
+        let drawCount = 0;
+        
+        while (currentX < GAME_CONFIG.width && drawCount < 5) { // Safety limit
+          ctx.drawImage(
+            backgroundImage,
+            0, 0, backgroundImage.width, backgroundImage.height,
+            currentX, 0, scaledWidth, GAME_CONFIG.height
+          );
+          currentX += scaledWidth;
+          drawCount++;
+        }
+      }
+
+      function renderNavigation() {
+        const navHeader = document.getElementById("navigationHeader");
+        // Always hide navigation for full-screen experience
+        navHeader.style.display = "none";
+      }
+
+      function render() {
+        if (gameState === "loading") return;
+
+        // Render navigation
+        renderNavigation();
+
+        const shakeX = screenShake > 0 ? utils.random(-screenShake, screenShake) : 0;
+        const shakeY = screenShake > 0 ? utils.random(-screenShake, screenShake) : 0;
+        ctx.save();
+        ctx.translate(shakeX, shakeY);
+        ctx.clearRect(-20, -20, GAME_CONFIG.width + 40, GAME_CONFIG.height + 40);
+
+        if (gameState === "menu") {
+          // Draw title screen image filling the entire screen
+          if (titleScreenSprite) {
+            // Fill the entire canvas with the title screen image
+            ctx.drawImage(titleScreenSprite, 0, 0, GAME_CONFIG.width, GAME_CONFIG.height);
+            
+            // Add "START" text near the bottom
+            ctx.fillStyle = "white";
+            ctx.font = "bold 24px Arial";
+            ctx.textAlign = "center";
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 4;
+            ctx.strokeText("START", GAME_CONFIG.width / 2, GAME_CONFIG.height - 80);
+            ctx.fillText("START", GAME_CONFIG.width / 2, GAME_CONFIG.height - 80);
+            
+            // Add smaller instruction text
+            ctx.fillStyle = "white";
+            ctx.font = "14px Arial";
+            ctx.strokeStyle = "black";
+            ctx.lineWidth = 3;
+            ctx.strokeText("Click or Press SPACE", GAME_CONFIG.width / 2, GAME_CONFIG.height - 50);
+            ctx.fillText("Click or Press SPACE", GAME_CONFIG.width / 2, GAME_CONFIG.height - 50);
+          } else {
+            // Fallback to text-based menu
+            ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+            ctx.fillRect(0, 0, GAME_CONFIG.width, GAME_CONFIG.height);
+            ctx.fillStyle = "#90EE90";
+            ctx.font = "bold 28px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("🐸 Coquí Island Hopper 🏝️", GAME_CONFIG.width / 2, GAME_CONFIG.height / 2 - 120);
+            const theme = courseThemes[courseTheme];
+            ctx.fillText(theme.name, GAME_CONFIG.width / 2, GAME_CONFIG.height / 2 - 80);
+            ctx.font = "14px Arial";
+            ctx.fillText(`Course #${courseSeed}`, GAME_CONFIG.width / 2, GAME_CONFIG.height / 2 - 60);
+            ctx.font = "16px Arial";
+            ctx.fillText("Click or Press SPACE to start!", GAME_CONFIG.width / 2, GAME_CONFIG.height / 2 + 90);
+          }
+        } else if (gameState === "playing" || gameState === "gameOver") {
+          // Draw scrolling background
+          drawScrollingBackground();
+
+          // Draw platforms
+          platforms.forEach((platform) => {
+            const sprite = createPixelArt.createPlatformSprite(platform.type, platform.width, platform.height);
+            ctx.drawImage(sprite, platform.x, platform.y);
+          });
+
+          // Draw collectibles
+          collectibles.forEach((collectible) => {
+            if (!collectible.collected) {
+              const sprite = createPixelArt.createCollectibleSprite(collectible.type);
+              ctx.shadowColor = collectible.type === "wild-mango" ? "#FF6347" : "#FFD700";
+              ctx.shadowBlur = 10;
+              ctx.drawImage(sprite, collectible.x, collectible.y);
+              ctx.shadowBlur = 0;
+            }
+          });
+
+          // Draw particles
+          particles.forEach((particle) => {
+            ctx.fillStyle = particle.color;
+            ctx.globalAlpha = particle.alpha;
+            ctx.fillRect(particle.x, particle.y, 3, 3);
+            ctx.globalAlpha = 1;
+          });
+
+          // Draw player
+          drawPlayer();
+
+          // UI
+          ctx.fillStyle = "white";
+          ctx.font = "bold 18px Arial";
+          ctx.textAlign = "left";
+          ctx.strokeStyle = "black";
+          ctx.lineWidth = 3;
+          ctx.strokeText(`${Math.floor(score / 10)}m`, 15, 30);
+          ctx.fillText(`${Math.floor(score / 10)}m`, 15, 30);
+          if (combo > 1) {
+            ctx.fillStyle = "#FFD700";
+            ctx.font = "bold 16px Arial";
+            ctx.strokeText(`Combo x${combo}`, 15, 55);
+            ctx.fillText(`Combo x${combo}`, 15, 55);
+          }
+          if (speedBoost > 0) {
+            ctx.fillStyle = "#FF69B4";
+            ctx.font = "bold 14px Arial";
+            ctx.strokeText("SPEED BOOST!", 15, 80);
+            ctx.fillText("SPEED BOOST!", 15, 80);
+          }
+
+          // Game over handled by Farcade SDK
+        }
+        ctx.restore();
+      }
+
+      window.addEventListener("load", () => setTimeout(initGame, 100));
+      document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+      document.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
+    </script>
+  </body>
+</html>
