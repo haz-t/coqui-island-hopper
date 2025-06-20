@@ -189,4 +189,4 @@ Game art assets are licensed under [CC BY-SA 4.0](https://creativecommons.org/li
 
 > 🐸 **Enjoy your adventure across Puerto Rico's magical landscapes!**
 
-*Made with ❤️ for the Puerto Rican gaming community* 
+*Made with ❤️ for the Puerto Rican gaming community*
